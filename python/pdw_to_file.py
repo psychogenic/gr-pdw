@@ -33,12 +33,27 @@ class pdw_to_file(gr.sync_block):
     """
     docstring for block pdw_to_file
     """
+    fields_list = [
+            'channel',
+            'pulse_width_samps',
+            'pulse_width_secs',
+            'pulse_power',
+            'noise_power',
+            'freq_start',
+            'freq_stop',
+            'toa_course',
+            'toa_fine',
+            'pulse_start_sample_index'
+
+            ]
+
+
     def __init__(self, file_name, fs: float=None, buffer_size: int=10000, enabled: bool=False):
         gr.sync_block.__init__(self,
-            name="pdw_to_file",
-            in_sig=None,
-            out_sig=None)
-        
+                               name="pdw_to_file",
+                               in_sig=None,
+                               out_sig=None)
+
         self.file_name = file_name
         self.fs = fs
 
@@ -63,20 +78,20 @@ class pdw_to_file(gr.sync_block):
         self.header_written = False
 
         self.np_first_buffer = True
-        
+
         self.message_port_register_in(pmt.intern("pdw_in"))
         self.set_msg_handler(pmt.intern("pdw_in"), self.handle_pdw_msg)
 
         self.pdw_header = {
-            'format_type': 0,
-            'format_src': 0,
-            'pdw_cv': 0,
-            'time_unix': 0,
-            'time_py': 0,
-            'samp_rate': 0,
-            'power_scale': 0,
-            'ref_lvl': 0
-        }
+                'format_type': 0,
+                'format_src': 0,
+                'pdw_cv': 0,
+                'time_unix': 0,
+                'time_py': 0,
+                'samp_rate': 0,
+                'power_scale': 0,
+                'ref_lvl': 0
+                }
 
         time_unix = int(round(time.time()))
         self.pdw_header['time_unix'] = time_unix
@@ -86,17 +101,21 @@ class pdw_to_file(gr.sync_block):
 
         self.pdw_header['samp_rate'] = self.fs
 
-        self.np_buffer0 = np.zeros((self.np_buffer_size, 9))
-        self.np_buffer1 = np.zeros((self.np_buffer_size, 9))
+        self.np_buffer0 = np.zeros((self.np_buffer_size, self.num_fields))
+        self.np_buffer1 = np.zeros((self.np_buffer_size, self.num_fields))
 
         self.first_write_done = False
+
+    @property 
+    def num_fields(self):
+        return len(self.fields_list)
 
     def stop(self):
         # When the flowgraph is stopped, write the active buffer to log file
         if self.enabled:
             self.buffer_to_file(buffer_select=self.np_first_buffer, final=True)
         return True
-    
+
     def reset(self):
         # This will reset the file name, pdw header info as the logger is 
         # enabled / disabled. For now the logs get written to the same file
@@ -110,7 +129,7 @@ class pdw_to_file(gr.sync_block):
             pdw_dict = pmt.to_python(pmt_msg)
 
             if isinstance(pdw_dict, dict):
-            
+
                 keys = list(pdw_dict.keys())
                 keys.sort()
                 for pdw_num in keys:
@@ -123,6 +142,7 @@ class pdw_to_file(gr.sync_block):
                         self.pdw_header['power_scale'] = pdw_data['power_scale']
                         self.pdw_header['ref_level'] = pdw_data['ref_lvl']
 
+                        start_samp_index = pdw_data['sob_offset']
                         fine_toa = pdw_data['fine_toa']
                         course_toa = pdw_data['course_toa']
                         pulse_pwr = pdw_data['pulse_power']
@@ -133,10 +153,11 @@ class pdw_to_file(gr.sync_block):
                         pulse_width_secs = pdw_data['pw_time']
                         pdw_channel = 0 # We don't specify channel yet
 
+                        npa = np.array([pdw_channel, pulse_width_samps, pulse_width_secs, pulse_pwr, noise_pwr, start_freq, stop_freq, course_toa, fine_toa, start_samp_index])
                         if self.np_first_buffer:
-                            self.np_buffer0[self.pdw_idx, :] = np.array([pdw_channel, pulse_width_samps, pulse_width_secs, pulse_pwr, noise_pwr, start_freq, stop_freq, course_toa, fine_toa])
+                            self.np_buffer0[self.pdw_idx, :] = npa
                         else:
-                            self.np_buffer1[self.pdw_idx, :] = np.array([pdw_channel, pulse_width_samps, pulse_width_secs, pulse_pwr, noise_pwr, start_freq, stop_freq, course_toa, fine_toa])
+                            self.np_buffer1[self.pdw_idx, :] = npa
 
                         self.pdw_idx += 1
 
@@ -158,63 +179,23 @@ class pdw_to_file(gr.sync_block):
                 f.attrs['ref_level'] = self.pdw_header['ref_level']
 
                 # Write the first chunk of data
-                f.create_dataset('pulse_width_samps', data=self.np_buffer0[:,1], chunks=True, maxshape=(None,))
-                f.create_dataset('pulse_width_secs', data=self.np_buffer0[:,2], chunks=True, maxshape=(None,))
-                f.create_dataset('pulse_power', data=self.np_buffer0[:,3], chunks=True, maxshape=(None,))
-                f.create_dataset('noise_power', data=self.np_buffer0[:,4], chunks=True, maxshape=(None,))
-                f.create_dataset('freq_start', data=self.np_buffer0[:,5], chunks=True, maxshape=(None,))
-                f.create_dataset('toa_course', data=self.np_buffer0[:,7], chunks=True, maxshape=(None,))
-                f.create_dataset('toa_fine', data=self.np_buffer0[:,8], chunks=True, maxshape=(None,))
-
+                for i in range(self.num_fields):
+                    fname = self.fields_list[i]
+                    print(f'Creating dataset {fname}')
+                    f.create_dataset(fname, data=self.np_buffer0[:,i], chunks=True, maxshape=(None,))
         else:
             # Appending data in chunks
             with h5py.File(self.file_name, 'a') as f:
                 if buffer_select:
-                    f['pulse_width_samps'].resize((f['pulse_width_samps'].shape[0]+self.np_buffer0.shape[0]), axis=0)
-                    f['pulse_width_samps'][-self.np_buffer0.shape[0]:] = self.np_buffer0[:,1]
-
-                    f['pulse_width_secs'].resize((f['pulse_width_secs'].shape[0]+self.np_buffer0.shape[0]), axis=0)
-                    f['pulse_width_secs'][-self.np_buffer0.shape[0]:] = self.np_buffer0[:,2]
-
-                    f['pulse_power'].resize((f['pulse_power'].shape[0]+self.np_buffer0.shape[0]), axis=0)
-                    f['pulse_power'][-self.np_buffer0.shape[0]:] = self.np_buffer0[:,3]
-
-                    f['noise_power'].resize((f['noise_power'].shape[0]+self.np_buffer0.shape[0]), axis=0)
-                    f['noise_power'][-self.np_buffer0.shape[0]:] = self.np_buffer0[:,4]
-
-                    f['freq_start'].resize((f['freq_start'].shape[0]+self.np_buffer0.shape[0]), axis=0)
-                    f['freq_start'][-self.np_buffer0.shape[0]:] = self.np_buffer0[:,5]
-
-                    f['toa_course'].resize((f['toa_course'].shape[0]+self.np_buffer0.shape[0]), axis=0)
-                    f['toa_course'][-self.np_buffer0.shape[0]:] = self.np_buffer0[:,7]
-
-                    f['toa_fine'].resize((f['toa_fine'].shape[0]+self.np_buffer0.shape[0]), axis=0)
-                    f['toa_fine'][-self.np_buffer0.shape[0]:] = self.np_buffer0[:,8]
-
+                    buf = self.np_buffer0
                 else:
-                    f['pulse_width_samps'].resize((f['pulse_width_samps'].shape[0]+self.np_buffer1.shape[0]), axis=0)
-                    f['pulse_width_samps'][-self.np_buffer1.shape[0]:] = self.np_buffer1[:,1]
+                    buf = self.np_buffer1
 
-                    f['pulse_width_secs'].resize((f['pulse_width_secs'].shape[0]+self.np_buffer1.shape[0]), axis=0)
-                    f['pulse_width_secs'][-self.np_buffer1.shape[0]:] = self.np_buffer1[:,2]
-       
-                    f['pulse_power'].resize((f['pulse_power'].shape[0]+self.np_buffer1.shape[0]), axis=0)
-                    f['pulse_power'][-self.np_buffer1.shape[0]:] = self.np_buffer1[:,3]
-
-                    f['noise_power'].resize((f['noise_power'].shape[0]+self.np_buffer1.shape[0]), axis=0)
-                    f['noise_power'][-self.np_buffer1.shape[0]:] = self.np_buffer1[:,4]
-
-                    f['freq_start'].resize((f['freq_start'].shape[0]+self.np_buffer1.shape[0]), axis=0)
-                    f['freq_start'][-self.np_buffer1.shape[0]:] = self.np_buffer1[:,5]
-
-                    f['toa_course'].resize((f['toa_course'].shape[0]+self.np_buffer1.shape[0]), axis=0)
-                    f['toa_course'][-self.np_buffer1.shape[0]:] = self.np_buffer1[:,7]
-
-                    f['toa_fine'].resize((f['toa_fine'].shape[0]+self.np_buffer1.shape[0]), axis=0)
-                    f['toa_fine'][-self.np_buffer1.shape[0]:] = self.np_buffer1[:,8]
-
-
-
+                for i in range(self.num_fields):
+                    fname = self.fields_list[i]
+                    f[fname].resize((f[fname].shape[0]+buf.shape[0]), axis=0)
+                    f[fname][-buf.shape[0]:] = buf[:,i]
+                    
 
     
 

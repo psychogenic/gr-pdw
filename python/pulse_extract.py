@@ -75,7 +75,7 @@ class pulse_extract(gr.sync_block):
                     sob_v = float(pmt.to_python(all_tags[idx-1].value))
                     eob_v = float(pmt.to_python(pdw_tag.value))
 
-                    pdw = self.measure_pulse(sob_v, eob_v, data, noise_iq)
+                    pdw = self.measure_pulse(sob_v, eob_v, all_tags[idx-1].offset, all_tags[idx].offset, data, noise_iq)
 
                     pdw_dict = pmt.make_dict()
                     pdw_dict = pmt.dict_add(pdw_dict, pmt.intern('pdw'), pmt.to_pmt(pdw))
@@ -88,7 +88,7 @@ class pulse_extract(gr.sync_block):
         return len(input_items[0])
  
         
-    def measure_pulse(self, time_sob, time_eob, iq, iq_noise):
+    def measure_pulse(self, time_sob, time_eob, offset_sob, offset_eob, iq, iq_noise):
         # Generate pulse measurements
         pw_time = time_eob - time_sob
         pw_cycles = int(round(pw_time * self.fs))
@@ -145,6 +145,7 @@ class pulse_extract(gr.sync_block):
 
         
         pdw = {
+            'sob_offset': offset_sob,
             'pw_time': pw_time,
             'pw_clock': pw_cycles,
             'dbfs': dbfs,
